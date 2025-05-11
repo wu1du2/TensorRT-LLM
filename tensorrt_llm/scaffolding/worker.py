@@ -10,8 +10,12 @@ from tensorrt_llm.executor import GenerationExecutor
 from tensorrt_llm.llmapi.llm import LLM
 from tensorrt_llm.sampling_params import SamplingParams
 
-from .task import GenerationTask, Task, TaskStatus
+from .task import GenerationTask, Task, TaskStatus, MCPCallTask, MCPListTask, ChatTask
 
+import asyncio
+from tensorrt_llm.scaffolding.mcp_utils import MCPClient
+
+import json
 ExecutorCls = GenerationExecutor
 
 
@@ -100,6 +104,7 @@ class OpenaiWorker(Worker):
 
         # Make the API call
         try:
+            print(f"openai worker params {params}")
             response = await self.async_client.completions.create(**params)
             self.fill_generation_task_with_response(task, response)
 
@@ -116,6 +121,66 @@ class OpenaiWorker(Worker):
 
     task_handlers = {GenerationTask: generation_handler}
 
+# Worker for standard openai api
+class OpenaiChatWorker(Worker):
+
+    def __init__(
+        self,
+        async_client: openai.AsyncOpenAI,
+        model: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.9,
+        top_p: Optional[float] = None,
+    ):
+        self.model = model
+        self.async_client = async_client
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.top_p = top_p
+
+    def combine_params_with_generation_task(self, params: dict,
+                                            task: ChatTask):
+        params["messages"] = task.messages
+
+        add_param_if_not_none(params, "max_tokens",
+                              [task.max_tokens, self.max_tokens])
+        add_param_if_not_none(params, "temperature",
+                              [task.temperature, self.temperature])
+        add_param_if_not_none(params, "top_p", [task.top_p, self.top_p])
+
+        add_param_if_not_none(params, "tools", [task.tools])
+        
+
+    def fill_generation_task_with_response(self, task: ChatTask,
+                                           response: openai.Completion):
+        task.output_str = response.choices[0].message.content
+        task.choice = response.choices[0]
+        task.logprobs = response.choices[0].logprobs
+
+    async def generation_handler(self, task: ChatTask) -> TaskStatus:
+        params = {}
+
+        # Set required parameters
+        params["model"] = self.model
+
+        self.combine_params_with_generation_task(params, task)
+
+        # Make the API call
+        try:
+            response = await self.async_client.chat.completions.create(**params)
+            self.fill_generation_task_with_response(task, response)
+            return TaskStatus.SUCCESS
+
+        except Exception as e:
+            # Handle errors
+            print('Openai chat client get exception: ' + str(e))
+            return TaskStatus.WORKER_EXECEPTION
+
+    def shutdown(self):
+        # OpenAI client doesn't require explicit cleanup
+        pass
+
+    task_handlers = {GenerationTask: generation_handler, ChatTask: generation_handler}
 
 # worker inherit from OpenaiWorker
 # add TRT-LLM openai server special params
@@ -201,7 +266,7 @@ class TRTLLMWorker(Worker):
     async def generation_handler(self, task: GenerationTask) -> TaskStatus:
         sampling_params = self.combine_sampling_params_with_generation_task(
             task)
-
+        print(f"in trtllm worker test input {task.input_str}")
         result = await self.llm.generate_async(task.input_str,
                                                sampling_params=sampling_params)
 
@@ -218,3 +283,39 @@ class TRTLLMWorker(Worker):
             self.llm.shutdown()
 
     task_handlers = {GenerationTask: generation_handler}
+
+
+class MCPWorker(Worker):
+
+    def __init__(
+        self,
+        mcp_client: MCPClient,
+    ):
+        self.mcp_client = mcp_client
+
+    @classmethod
+    async def init_with_url(cls, url):
+        client = MCPClient()
+        try:
+            await client.connect_to_sse_server(server_url=url)
+        finally:
+            return cls(client)
+
+    async def call_handler(self, task: MCPCallTask) -> TaskStatus:
+        tool_name = task.tool_name
+        args = json.loads(task.args)
+        response = await self.mcp_client.call_tool(tool_name, args)
+        print(f"mcp call tool response {response}")
+        task.output_str = response.content[0].text
+        return TaskStatus.SUCCESS
+    
+    async def list_handler(self, task: MCPListTask) -> TaskStatus:
+        response = await self.mcp_client.list_tools()
+        task.output_str = response
+        task.result_tools = response.tools
+        return TaskStatus.SUCCESS
+
+    async def shutdown(self):
+        await self.mcp_client.cleanup()
+
+    task_handlers = {MCPListTask: list_handler, MCPCallTask: call_handler}

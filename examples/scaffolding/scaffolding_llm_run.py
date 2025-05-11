@@ -11,7 +11,7 @@ def parse_arguments():
         '--generation_dir',
         type=str,
         default=
-        "/home/scratch.trt_llm_data/llm-models/DeepSeek-R1/DeepSeek-R1-Distill-Qwen-7B"
+        "/code/tensorrt_llm/examples/scaffolding/contrib/models/meta-llama/Llama-3.2-1B-Instruct"
     )
     parser.add_argument('--verifier_dir', type=str, default=None)
     parser.add_argument('--run_async', action='store_true')

@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+      "web_search": {
+        "command": "uv",
+        "args": ["run", "web_search.py"]
+      }
+    }
+  }

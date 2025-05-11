@@ -64,9 +64,93 @@ class GenerationTask(Task):
         output.output_str = self.output_str
         return output
 
+@dataclass
+class ChatTask(Task):
+    messages : list = None
+    tools = None
+    skip_tokenizer: bool = False
+    skip_detokenizer: bool = False
+    # sampling params
+    #custom_sampling_params: Optional[dict] = None
+    max_tokens: Optional[int] = field(default=None)
+    temperature: Optional[float] = field(default=None)
+    top_p: Optional[float] = field(default=None)
+    top_k: Optional[int] = field(default=None)
+
+    # suggest to use Controller.WorkerTag
+    # anyway, users need to ensure that the value of the worker_tag can be found in the scaffoldingLlm's workers map
+    worker_tag: Union[str, "Controller.WorkerTag"] = None
+
+    # result field
+    output_tokens: List[int] = None
+    output_str: Optional[str] = None
+    choice = None
+    cumulative_logprob: Optional[float] = None
+    logprobs: List[float] = field(default_factory=list)
+
+    @staticmethod
+    def create_from_prompt(messages: list, prompt: str, tools) -> "ChatTask":
+        task = ChatTask()
+        messages.append({"role": "user", "content": prompt})
+        task.messages = messages
+        task.tools = tools
+        return task
+
+    def create_scaffolding_output(self) -> "ScaffoldingOutput":
+        output = ScaffoldingOutput()
+        output.output_str = self.output_str
+        return output
+
+
 
 @dataclass
 class RewardTask(Task):
     # input field
     input_tokens: Optional[List[int]] = field(default=None)
     input_str: Optional[str] = field(default=None)
+
+@dataclass
+class MCPCallTask(Task):
+    # mcp inputs
+    tool_name: Optional[str] = field(default=None)
+    args: Optional[dict] = field(default=None)
+    # retrying controll
+    retry: Optional[int] = field(default=1)
+    delay: Optional[float] = field(default=10)
+
+    worker_tag: Union[str, "Controller.WorkerTag"] = None
+
+    #result field
+    result_str: Optional[str] = None
+
+    @staticmethod
+    def create_mcptask(tool_name: str, args: dict, retry: int = 1, delay: float = 1) -> "MCPCallTask":
+        task = MCPCallTask()
+        task.tool_name = tool_name
+        task.args = args
+        task.retry = retry
+        task.delay = delay
+        return task
+
+    def create_scaffolding_output(self) -> "ScaffoldingOutput":
+        output = ScaffoldingOutput()
+        output.output_str = self.result_str
+        return output
+
+@dataclass
+class MCPListTask(Task):
+    worker_tag: Union[str, "Controller.WorkerTag"] = None
+
+    #result field
+    result_str: Optional[str] = None
+    result_tools = None
+
+    @staticmethod
+    def create_mcptask() -> "MCPListTask":
+        task = MCPListTask()
+        return task
+
+    def create_scaffolding_output(self) -> "ScaffoldingOutput":
+        output = ScaffoldingOutput()
+        output.output_str = self.result_str
+        return output
